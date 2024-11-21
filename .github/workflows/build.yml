@@ -10,84 +10,50 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Debug Info
-        run: |
-          echo "Starting build process..."
-          pwd
-          ls -la
-
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           repository: llogick/zigscient
           ref: dev
-
-      - name: Setup Zig
-        uses: mlugg/setup-zig@v1
+      - uses: mlugg/setup-zig@v1
         with:
           version: master
-
-      # Add more debug info
-      - name: Test Zig Setup
-        run: |
-          zig version
-          zig env
-
       - name: Build all targets
         run: |
           mkdir -p builds
           for target in "x86_64-linux-gnu" "aarch64-linux-gnu" "x86_64-windows" "aarch64-windows" "x86_64-macos" "aarch64-macos"; do
-            echo "Building for $target..."
-            zig build -Dtarget=${target} --prefix builds/${target}
-            ls -la builds/${target}
+            zig build -Dtarget=${target} -Doptimize=ReleaseFast
+            if [[ $target == *"windows"* ]]; then
+              cp zig-out/bin/zigscient.exe builds/zigscient-${target}.exe
+            else
+              cp zig-out/bin/zigscient builds/zigscient-${target}
+            fi
           done
-
-      - name: Archive builds
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: zigscient-release
           path: builds/
-
   release:
     needs: build
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - name: Debug Release
-        run: |
-          echo "Starting release process..."
-          pwd
-          ls -la
-
-      - name: Download release artifact
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
           name: zigscient-release
           path: zigscient-release
-
-      - name: Get the current date
-        id: date
+      - name: Get current date
         run: echo "CURRENT_DATE=$(date +'%Y%m%d')" >> $GITHUB_ENV
-
-      - name: Create zip files
+      - name: Create zips
         run: |
           cd zigscient-release
-          pwd
-          ls -la
-          for dir in */; do
-            target=${dir%/}
-            echo "Creating zip for $target..."
-            zip -r "../zigscient-${target}.zip" "$dir"
+          for file in *; do
+            zip -j "../${file%.*}.zip" "$file"
           done
-          cd ..
-          ls -la *.zip
-
-      - name: Upload release build artifact to GitHub Release
-        uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v2
         with:
           name: ${{ env.CURRENT_DATE }}
           tag_name: ${{ env.CURRENT_DATE }}
           draft: false
           make_latest: true
-          files: zigscient-*.zip
+          files: "*.zip"
