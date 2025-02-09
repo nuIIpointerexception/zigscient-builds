@@ -6,32 +6,64 @@ on:
   push:
     branches:
       - main
+
 jobs:
+  check_updates:
+    runs-on: ubuntu-latest
+    outputs:
+      has_changes: ${{ steps.check.outputs.has_changes }}
+    steps:
+      - id: check
+        name: Check for upstream changes
+        run: |
+          # Get the latest commit hash from the upstream repo
+          LATEST=$(curl -s "https://api.github.com/repos/llogick/zigscient/commits/dev" | jq -r .sha)
+          
+          # Get the last built commit hash from the latest release
+          LAST_BUILT=$(curl -s "https://api.github.com/repos/${{ github.repository }}/releases/latest" | jq -r '.body // empty')
+          
+          if [ -z "$LAST_BUILT" ] || [ "$LATEST" != "$LAST_BUILT" ]; then
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+            echo "New changes detected in upstream repository"
+          else
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+            echo "No new changes in upstream repository"
+          fi
+          # Store the latest commit hash for the release
+          echo "latest_commit=$LATEST" >> $GITHUB_OUTPUT
+
   build:
+    needs: check_updates
+    if: ${{ needs.check_updates.outputs.has_changes == 'true' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           repository: llogick/zigscient
           ref: dev
+          token: ${{ secrets.GITHUB_TOKEN }}
+      
       - uses: mlugg/setup-zig@v1
         with:
           version: master
       - name: Build all targets
         run: |
           mkdir -p builds
-          for target in "x86_64-linux-gnu" "aarch64-linux-gnu" "x86_64-windows" "aarch64-windows" "x86_64-macos" "aarch64-macos"; do
-            zig build -Dtarget=${target} -Doptimize=ReleaseFast
+          targets=("x86_64-linux-gnu" "aarch64-linux-gnu" "x86_64-windows" "aarch64-windows" "x86_64-macos" "aarch64-macos")
+          for target in "${targets[@]}"; do
+            echo "Building for $target..."
+            zig build -Dtarget=${target} -Doptimize=ReleaseFast || exit 1
             if [[ $target == *"windows"* ]]; then
-              cp zig-out/bin/zigscient.exe builds/zigscient-${target}.exe
+              cp zig-out/bin/zigscient.exe "builds/zigscient-${target}.exe"
             else
-              cp zig-out/bin/zigscient builds/zigscient-${target}
+              cp zig-out/bin/zigscient "builds/zigscient-${target}"
             fi
           done
       - uses: actions/upload-artifact@v4
         with:
           name: zigscient-release
           path: builds/
+          retention-days: 5
   release:
     needs: build
     runs-on: ubuntu-latest
@@ -56,4 +88,6 @@ jobs:
           tag_name: ${{ env.CURRENT_DATE }}
           draft: false
           make_latest: true
+          body: ${{ needs.check_updates.outputs.latest_commit }}
           files: "*.zip"
+          token: ${{ secrets.GITHUB_TOKEN }}
